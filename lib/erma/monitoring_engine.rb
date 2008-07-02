@@ -1,6 +1,9 @@
 require 'singleton'
 
 module Erma
+  # The engine that controls basic correlation of monitors as they are collected
+  # and submitted to the engine. All monitors should call these methods at key
+  # points in their lifetime so that they are processed correctly.
   class MonitoringEngine
     include Singleton
 
@@ -22,7 +25,6 @@ module Erma
       processor_factory.startup
 
       @running = true
-      self.enabled = true
     end
 
     # Shuts down the monitoring engine. This method should be called before
@@ -49,8 +51,7 @@ module Erma
     # After this method returns, the monitor will have had any implicitly
     # inherited and global attributes applied.
     def init_monitor(monitor)
-      return unless enabled?
-
+      return unless processing?
       monitor.set(:created_at, Time.now).serializable.lock
       monitor.set(:thread_id, Thread.current.__id__).serializable.lock
     end
@@ -59,7 +60,7 @@ module Erma
     # monitor has been created. All monitor implementations should call this
     # method after setting attributes known at creation on themselves.
     def monitor_created(monitor)
-      return unless enabled?
+      return unless processing?
       handle_monitor(monitor, :monitor_created)
     end
 
@@ -67,7 +68,7 @@ module Erma
     # monitor has been started. All monitor implementations that have a
     # start-stop concept should call this monitor at start.
     def composite_monitor_started(monitor)
-      return unless enabled?
+      return unless processing?
       handle_monitor(monitor, :composite_monitor_started)
     end
 
@@ -75,7 +76,7 @@ module Erma
     # monitor is ready to be processed. All monitor implementations should call
     # as the last call of their lifecycle.
     def composite_monitor_completed(monitor)
-      return unless enabled?
+      return unless processing?
       handle_monitor(monitor, :composite_monitor_completed)
     end
 
@@ -83,8 +84,17 @@ module Erma
     # monitor is ready to be processed. All monitor implementations should call this 
     # method as the last call of their lifecycle.
     def process(monitor)
-      return unless enabled?
+      return unless processing?
       handle_monitor(monitor, :process)
+    end
+
+    def set(attr_key, attr_val)
+      @global_attributes ||= {}
+      @global_attributes[attr_key] = attr_val
+    end
+
+    def inheritable_attributes
+      @global_attributes
     end
 
     attr_writer :enabled
@@ -94,6 +104,11 @@ module Erma
 
     def running?
       @running
+    end
+
+    # Returns true if the MonitoringEngine is processing Monitors.
+    def processing?
+      enabled? && running?
     end
 
     private
@@ -110,6 +125,11 @@ module Erma
       rescue Exception
         # Swallowed
       end
+    end
+
+    def initialize
+      puts 'Calling initialize'
+      self.enabled = true
     end
   end
 end

@@ -5,6 +5,7 @@ describe Erma::MonitoringEngine do
     @engine = Erma::MonitoringEngine.instance
     @engine.enabled = true
     @engine.processor_factory = stub('MockProcessorFactory', :null_object => true)
+    @engine.startup
   end
 
   after { @engine.shutdown }
@@ -15,7 +16,10 @@ describe Erma::MonitoringEngine do
   end
 
   describe "without a processor_factory set" do
-    before { @engine.processor_factory = nil }
+    before do 
+      @engine.shutdown
+      @engine.processor_factory = nil 
+    end
 
     it "should raise an Error when startup is called" do
       lambda { @engine.startup }.should raise_error
@@ -61,10 +65,37 @@ describe Erma::MonitoringEngine do
     @engine.should_not be_running
   end
 
+  # TODO Java version should have this concept instead of confusing isEnabled() method
+  describe "processing?" do
+    it "should be true if enabled and running" do
+      @engine.enabled = true
+      @engine.startup
+      @engine.should be_processing
+    end
+
+    it "should be false if not enabled" do
+      @engine.enabled = false
+      @engine.startup
+      @engine.should_not be_processing
+    end
+
+    it "should be false if not running" do
+      @engine.enabled = true
+      @engine.shutdown
+      @engine.should_not be_processing
+    end
+  end
+
   describe 'Monitor callback', :shared => true do
     it "should do nothing if not enabled" do
       # TODO suggest this as an extra test case in Java ERMA impl
       @engine.enabled = false
+      @engine.processor_factory.should_not_receive(:processors_for_monitor)
+      @engine.send(@callback_method, mock('fake_monitor'))
+    end
+
+    it "should do nothing if not running" do
+      @engine.shutdown
       @engine.processor_factory.should_not_receive(:processors_for_monitor)
       @engine.send(@callback_method, mock('fake_monitor'))
     end
@@ -149,5 +180,34 @@ describe Erma::MonitoringEngine do
   describe "processing process callback" do
     before { @callback_method = :process }
     it_should_behave_like 'Monitor callback'
+  end
+
+  describe "global_attributes" do
+    it "should be included in the inheritable_attributes call" do
+      @engine.set('foo', 12)
+      @engine.inheritable_attributes['foo'].should == 12
+    end
+
+    it "should be able to be overridden" do
+      @engine.set('foo', 12)
+      @engine.set('foo', 13)
+      @engine.inheritable_attributes['foo'].should == 13
+    end
+
+    it "should be global across threads" do
+      @engine.set('foo', 12)
+      thread = Thread.new { @engine.inheritable_attributes['foo'].should == 12 }
+      thread.join
+    end
+  end
+
+  describe "inherited_attributes" do
+    before do
+      @monitor = stub_everything("mock_monitor")
+    end
+
+    it "should include inheritable attributes on parent Monitors" do
+      @monitor.should_receive(:inheritable_attribute_holders).
+    end
   end
 end

@@ -1,4 +1,5 @@
 require 'singleton'
+require 'monitor.rb'
 
 module Erma
   # The engine that controls basic correlation of monitors as they are collected
@@ -23,6 +24,7 @@ module Erma
       raise 'processor_factory has not been set' unless processor_factory
 
       processor_factory.startup
+      stack_map.clear
 
       @running = true
     end
@@ -67,14 +69,29 @@ module Erma
     # A lifecylce method that notifies observing MonitorProcessors that a
     # monitor has been started. All monitor implementations that have a
     # start-stop concept should call this monitor at start.
+    def monitor_started(monitor)
+      return unless processing?
+      handle_monitor(monitor, :monitor_started)
+    end
+    
+    # Adds the supplied CompositeMonitor to the stack for this thread. 
+    #
+    # This method should be called by all CompositeMonitor implementations
+    # before they call monitorStarted().
     def composite_monitor_started(monitor)
       return unless processing?
-      handle_monitor(monitor, :composite_monitor_started)
+      
+      monitor_stack.push(monitor)
     end
 
-    # A lifecycle method that notifies observing MonitorProcessors that a
-    # monitor is ready to be processed. All monitor implementations should call
-    # as the last call of their lifecycle.
+    # Pops this monitor off the top of the stack. If this monitor is not on the
+    # top of the stack nor found anywhere within the stack, the monitor is
+    # ignored, as this is an error in instrumentation. If the monitor is
+    # found within the stack, the top of the stack is repeatedly popped and
+    # processed until this monitor is on the the top.
+    #
+    # This method should be called by all CompositeMonitor implementations
+    # before they call process().
     def composite_monitor_completed(monitor)
       return unless processing?
       handle_monitor(monitor, :composite_monitor_completed)
@@ -88,9 +105,12 @@ module Erma
       handle_monitor(monitor, :process)
     end
 
-    def set(attr_key, attr_val)
+    def get_composite_monitor_named(name)
+      monitor_stack.reverse.find {|m| m['name'] == name} 
+    end
+
+    def global_attributes
       @global_attributes ||= {}
-      @global_attributes[attr_key] = attr_val
     end
 
     def inheritable_attributes
@@ -128,8 +148,20 @@ module Erma
     end
 
     def initialize
-      puts 'Calling initialize'
       self.enabled = true
+    end
+
+    def monitor_stack
+      stack_map.synchronize do
+        stack_map[Thread.current.__id__] ||= []
+      end
+    end
+
+    def stack_map
+      @stack_map ||= begin
+        map = {}
+        map.extend(MonitorMixin)
+      end
     end
   end
 end

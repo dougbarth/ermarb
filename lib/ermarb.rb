@@ -6,3 +6,4 @@ module Ermarb; end
 module Erma; end
 
 require 'erma/monitoring_engine'
+require 'erma/monitor'

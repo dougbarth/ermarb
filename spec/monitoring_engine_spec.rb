@@ -86,7 +86,7 @@ describe Erma::MonitoringEngine do
     end
   end
 
-  describe 'Monitor callback', :shared => true do
+  describe 'pass to processors callback', :shared => true do
     it "should do nothing if not enabled" do
       # TODO suggest this as an extra test case in Java ERMA impl
       @engine.enabled = false
@@ -131,6 +131,21 @@ describe Erma::MonitoringEngine do
     end
   end
 
+  describe "processing monitor_created callback" do
+    before { @callback_method = :monitor_created }
+    it_should_behave_like 'pass to processors callback'
+  end
+
+  describe "processing monitor_started callback" do
+    before { @callback_method = :monitor_started }
+    it_should_behave_like 'pass to processors callback'
+  end
+
+  describe "processing process callback" do
+    before { @callback_method = :process }
+    it_should_behave_like 'pass to processors callback'
+  end
+
   describe "processing init_monitor callback" do
     before do 
       @monitor = stub_everything('mock_monitor')
@@ -162,52 +177,75 @@ describe Erma::MonitoringEngine do
     end
   end
 
-  describe "processing monitor_created callback" do
-    before { @callback_method = :monitor_created }
-    it_should_behave_like 'Monitor callback'
-  end
-
   describe "processing composite_monitor_started callback" do
-    before { @callback_method = :composite_monitor_started }
-    it_should_behave_like 'Monitor callback'
+    it "should remember the monitor added" do
+      @monitor = Erma::Monitor.new('foo')
+      @engine.composite_monitor_started(@monitor)
+      @engine.get_composite_monitor_named('foo').should == @monitor
+    end
+
+    it "should maintain a stack of Monitors" do
+      @engine.composite_monitor_started(Erma::Monitor.new('foo'))
+      @newer_monitor = Erma::Monitor.new('foo')
+      @engine.composite_monitor_started(@newer_monitor)
+      @engine.get_composite_monitor_named('foo').should == @newer_monitor
+    end
+
+    it "should maintain separate stacks for each thread" do
+      threads = []
+      2.times do |i|
+        threads << Thread.new do 
+          monitor = Erma::Monitor.new('foo')
+          @engine.composite_monitor_started(monitor)
+          Thread.pass
+          @engine.get_composite_monitor_named('foo').should == monitor
+        end
+      end
+      threads.each {|t| t.join}
+    end
+
+    it "should do nothing if monitoring is not enabled" do
+      @engine.enabled = false
+      @engine.composite_monitor_started(Erma::Monitor.new('foo'))
+      @engine.get_composite_monitor_named('foo').should == nil
+    end
   end
 
   describe "processing composite_monitor_completed callback" do
-    before { @callback_method = :composite_monitor_completed }
-    it_should_behave_like 'Monitor callback'
-  end
-
-  describe "processing process callback" do
-    before { @callback_method = :process }
-    it_should_behave_like 'Monitor callback'
   end
 
   describe "global_attributes" do
     it "should be included in the inheritable_attributes call" do
-      @engine.set('foo', 12)
+      @engine.global_attributes['foo'] = 12
       @engine.inheritable_attributes['foo'].should == 12
     end
 
     it "should be able to be overridden" do
-      @engine.set('foo', 12)
-      @engine.set('foo', 13)
+      @engine.global_attributes['foo'] = 12
+      @engine.global_attributes['foo'] = 13
       @engine.inheritable_attributes['foo'].should == 13
     end
 
     it "should be global across threads" do
-      @engine.set('foo', 12)
+      @engine.global_attributes['foo'] = 12
       thread = Thread.new { @engine.inheritable_attributes['foo'].should == 12 }
       thread.join
     end
   end
 
-  describe "inherited_attributes" do
+  describe "inheritable_attributes" do
     before do
+      @engine.global_attributes.clear
+
       @monitor = stub_everything("mock_monitor")
+      @attr_holders = {:foo => Erma::Monitor::AttributeHolder.new('bar', false, false)}
+      @monitor.should_receive(:inheritable_attribute_holders).and_return(@attr_holders)
+      @engine.composite_monitor_started(@monitor)
     end
 
     it "should include inheritable attributes on parent Monitors" do
-      @monitor.should_receive(:inheritable_attribute_holders).
+      pending
+      @engine.inheritable_attributes.should == @attr_holders
     end
   end
 end

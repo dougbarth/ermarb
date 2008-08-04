@@ -5,10 +5,8 @@ describe Erma::MonitoringEngine do
     @engine = Erma::MonitoringEngine.instance
     @engine.enabled = true
     @engine.processor_factory = stub('MockProcessorFactory', :null_object => true)
-    @engine.startup
+    @engine.restart
   end
-
-  after { @engine.shutdown }
 
   it "should be enabled after startup" do
     @engine.startup
@@ -63,6 +61,24 @@ describe Erma::MonitoringEngine do
     @engine.processor_factory.should_receive(:shutdown).and_raise
     lambda { @engine.shutdown }.should raise_error
     @engine.should_not be_running
+  end
+
+  describe "restart" do
+    it "should call shutdown" do
+      @engine.should_receive(:shutdown)
+      @engine.restart
+    end
+
+    it "should not call shutdown if not running" do
+      @engine.shutdown
+      @engine.should_receive(:shutdown).never
+      @engine.restart
+    end
+
+    it "should call startup" do
+      @engine.should_receive(:startup)
+      @engine.restart
+    end
   end
 
   # TODO Java version should have this concept instead of confusing isEnabled() method
@@ -148,28 +164,31 @@ describe Erma::MonitoringEngine do
 
   describe "processing init_monitor callback" do
     before do 
-      @monitor = stub_everything('mock_monitor')
+      @monitor = Erma::EventMonitor.new('test')
     end
 
     it "should set the created_at attribute on the monitor as serializable and locked" do
-      attr_holder = mock('attr_holder')
-      @monitor.should_receive(:set).with(:created_at, anything).and_return(attr_holder)
-      @monitor.should_receive(:set).with(:thread_id, anything).and_return(stub_everything)
-      attr_holder.should_receive(:serializable).and_return(attr_holder)
-      attr_holder.should_receive(:lock)
       @engine.init_monitor(@monitor)
+      @monitor.should have_attribute(:created_at)
+      @monitor.should be_locked(:created_at)
+      @monitor.should be_serializable(:created_at)
     end
 
     it "should set the thread ID attribute on the monitor and serializable and locked" do
-      attr_holder = mock('attr_holder')
-      @monitor.should_receive(:set).with(:created_at, anything).and_return(stub_everything)
-      @monitor.should_receive(:set).with(:thread_id, Thread.current.__id__).and_return(attr_holder)
-      attr_holder.should_receive(:serializable).and_return(attr_holder)
-      attr_holder.should_receive(:lock)
       @engine.init_monitor(@monitor)
+      @monitor.should have_attribute(:thread_id)
+      @monitor.should be_locked(:thread_id)
+      @monitor.should be_serializable(:thread_id)
+      @monitor[:thread_id].should == Thread.current.__id__
     end
 
     it "should set inherited attributes on monitor"
+
+    it "should inherit global attributes" do
+      @engine.global_attributes['foo'] = 10
+      @engine.init_monitor(@monitor)
+      @monitor['foo'].should == 10
+    end
 
     it "should do nothing if not enabled" do
       @engine.enabled = false
@@ -212,23 +231,69 @@ describe Erma::MonitoringEngine do
   end
 
   describe "processing composite_monitor_completed callback" do
+    it "should pop the monitor from the stack" do
+      @monitor = Erma::Monitor.new('foo')
+      @engine.composite_monitor_started(@monitor)
+      @engine.composite_monitor_completed(@monitor)
+      @engine.get_composite_monitor_named('foo').should == nil
+    end
+
+    it "should pop only the monitor provided" do
+      @parent = Erma::Monitor.new('parent')
+      @child = Erma::Monitor.new('child')
+      @engine.composite_monitor_started(@parent)
+      @engine.composite_monitor_started(@child)
+      @engine.composite_monitor_completed(@child)
+      @engine.get_composite_monitor_named('child').should == nil
+      @engine.get_composite_monitor_named('parent').should == @parent
+    end
+
+    it "should ignore double calls" do
+      @parent = Erma::Monitor.new('parent')
+      @child = Erma::Monitor.new('child')
+      @engine.composite_monitor_started(@parent)
+      @engine.composite_monitor_started(@child)
+      @engine.composite_monitor_completed(@child)
+      @engine.composite_monitor_completed(@child)
+      @engine.get_composite_monitor_named('child').should == nil
+      @engine.get_composite_monitor_named('parent').should == @parent
+    end
+
+    it "should process missed monitors" do
+      @parent = Erma::Monitor.new('parent')
+      @child = Erma::Monitor.new('child')
+      @engine.should_receive(:process).with(@child)
+      @engine.composite_monitor_started(@parent)
+      @engine.composite_monitor_started(@child)
+      @engine.composite_monitor_completed(@parent)
+    end
+  end
+
+  describe "get_composite_monitor_named" do
+    it "should raise a RuntimeError when passed nil" do
+      lambda { @engine.get_composite_monitor_named(nil) }.should raise_error
+    end
   end
 
   describe "global_attributes" do
+    before do
+      @engine.global_attributes.clear
+    end
+
     it "should be included in the inheritable_attributes call" do
       @engine.global_attributes['foo'] = 12
-      @engine.inheritable_attributes['foo'].should == 12
+      @engine.inheritable_attributes['foo'].value.should == 12
     end
 
     it "should be able to be overridden" do
       @engine.global_attributes['foo'] = 12
       @engine.global_attributes['foo'] = 13
-      @engine.inheritable_attributes['foo'].should == 13
+      @engine.inheritable_attributes['foo'].value.should == 13
     end
 
     it "should be global across threads" do
       @engine.global_attributes['foo'] = 12
-      thread = Thread.new { @engine.inheritable_attributes['foo'].should == 12 }
+      thread = Thread.new { @engine.inheritable_attributes['foo'].value.should == 12 }
       thread.join
     end
   end
@@ -244,7 +309,6 @@ describe Erma::MonitoringEngine do
     end
 
     it "should include inheritable attributes on parent Monitors" do
-      pending
       @engine.inheritable_attributes.should == @attr_holders
     end
   end

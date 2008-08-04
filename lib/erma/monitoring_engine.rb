@@ -1,5 +1,5 @@
 require 'singleton'
-require 'monitor.rb'
+require 'monitor'
 
 module Erma
   # The engine that controls basic correlation of monitors as they are collected
@@ -46,6 +46,16 @@ module Erma
       end
     end
 
+    # Shuts down the MonitoringEngine if it is running. After it is shutdown,
+    # the MonitoringEngine will be started up.
+    #
+    # *This method is not thread-safe.* Clients should take care to ensure
+    # that multithreaded access to this method is synchronized.
+    def restart
+      shutdown if running?
+      startup
+    end
+
     # A lifecycle method that initializes the Monitor. All monitor
     # implementations must call this methods before setting any attributes on
     # themselves.
@@ -54,8 +64,11 @@ module Erma
     # inherited and global attributes applied.
     def init_monitor(monitor)
       return unless processing?
+
       monitor.set(:created_at, Time.now).serializable.lock
       monitor.set(:thread_id, Thread.current.__id__).serializable.lock
+
+      inherit_attributes(monitor)
     end
 
     # A lifecycle method that notifies observing MonitorProcessors that a new
@@ -94,7 +107,12 @@ module Erma
     # before they call process().
     def composite_monitor_completed(monitor)
       return unless processing?
-      handle_monitor(monitor, :composite_monitor_completed)
+
+      return unless monitor_stack.include?(monitor)
+
+      while (missed_mon = monitor_stack.pop) != monitor
+        process(missed_mon)
+      end
     end
 
     # A lifecycle method that notifies observing MonitorProcessors that a
@@ -105,7 +123,16 @@ module Erma
       handle_monitor(monitor, :process)
     end
 
+    
+    # Obtains the first CompositeMonitor found on the per thread stack that has
+    # its name attribute equal to the supplied name. This method should be used
+    # in situations where stateless code is unable to hold a reference to
+    # the CompositeMonitor that was originally created. Supplying the name
+    # value is needed to ensure that instrumentation errors in code called by
+    # users of this method does not interfere with the ability to correctly
+    # obtain the original CompositeMonitor.
     def get_composite_monitor_named(name)
+      raise 'Must supply a non-nil name' if name.nil?
       monitor_stack.reverse.find {|m| m['name'] == name} 
     end
 
@@ -114,7 +141,16 @@ module Erma
     end
 
     def inheritable_attributes
-      @global_attributes
+      inheritable_attributes = {}
+      global_attributes.each do |key, value|
+        inheritable_attributes[key] = Erma::Monitor::AttributeHolder.new(value, false, false)
+      end
+
+      monitor_stack.each do |ancestor|
+        inheritable_attributes.merge!(ancestor.inheritable_attribute_holders)
+      end
+
+      inheritable_attributes
     end
 
     attr_writer :enabled
@@ -144,6 +180,12 @@ module Erma
         end
       rescue Exception
         # Swallowed
+      end
+    end
+
+    def inherit_attributes(monitor)
+      global_attributes.each do |key, value|
+        monitor.set(key, value)
       end
     end
 

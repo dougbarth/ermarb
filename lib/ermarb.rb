@@ -7,3 +7,4 @@ module Erma; end
 
 require 'erma/monitoring_engine'
 require 'erma/monitor'
+require 'erma/event_monitor'
